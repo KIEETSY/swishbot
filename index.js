@@ -1,51 +1,56 @@
-const { Client, Collection } = require("discord.js");
-const client = new Client({ intents: 32767 });
-module.exports = client;
-const chalk = require("chalk");
+const { glob } = require("glob");
+const { promisify } = require("util");
+const globPromise = promisify(glob);
+const mongoose = require("mongoose");
 
-client.commands = new Collection();
-client.aliases = new Collection();
-client.cooldowns = new Collection();
-client.slashCommands = new Collection();
-client.config = require("./config.json");
-require("./handler")(client);
+module.exports = async (client) => {
+  // ———————————————[Commands]———————————————
+  const commandFiles = await globPromise(`${process.cwd()}/commands/**/*.js`);
+  commandFiles.map((value) => {
+    const file = require(value);
+    const splitted = value.split("/");
+    const directory = splitted[splitted.length - 2];
 
-const token = process.env["TOKEN"] || client.config.token;
-client.login(token);
+    if (file.name) {
+      const properties = { directory, ...file };
+      client.commands.set(file.name, properties);
+    }
+  });
 
-process.on("unhandledRejection", (reason, p) => {
-   console.log(chalk.gray("—————————————————————————————————"));
-   console.log(
-      chalk.white("["),
-      chalk.red.bold("AntiCrash"),
-      chalk.white("]"),
-      chalk.gray(" : "),
-      chalk.white.bold("Unhandled Rejection/Catch")
-   );
-   console.log(chalk.gray("—————————————————————————————————"));
-   console.log(reason, p);
-});
-process.on("uncaughtException", (err, origin) => {
-   console.log(chalk.gray("—————————————————————————————————"));
-   console.log(
-      chalk.white("["),
-      chalk.red.bold("AntiCrash"),
-      chalk.white("]"),
-      chalk.gray(" : "),
-      chalk.white.bold("Uncaught Exception/Catch")
-   );
-   console.log(chalk.gray("—————————————————————————————————"));
-   console.log(err, origin);
-});
-process.on("multipleResolves", (type, promise, reason) => {
-   console.log(chalk.gray("—————————————————————————————————"));
-   console.log(
-      chalk.white("["),
-      chalk.red.bold("AntiCrash"),
-      chalk.white("]"),
-      chalk.gray(" : "),
-      chalk.white.bold("Multiple Resolves")
-   );
-   console.log(chalk.gray("—————————————————————————————————"));
-   console.log(type, promise, reason);
-});
+  // ———————————————[Events]———————————————
+  const eventFiles = await globPromise(`${process.cwd()}/events/*.js`);
+  eventFiles.map((value) => require(value));
+
+  // ———————————————[Slash Commands]———————————————
+  const slashCommands = await globPromise(
+    `${process.cwd()}/SlashCommands/*/*.js`
+  );
+
+  const arrayOfSlashCommands = [];
+  slashCommands.map((value) => {
+    const file = require(value);
+    if (!file?.name) return;
+    client.slashCommands.set(file.name, file);
+
+    if (["MESSAGE", "USER"].includes(file.type)) delete file.description;
+    arrayOfSlashCommands.push(file);
+  });
+  client.on("ready", async () => {
+    if (client.config.serverID === "") {
+      await client.application.commands.set(arrayOfSlashCommands);
+    } else {
+      await client.guilds.cache
+        .get(client.config.serverID)
+        .commands.set(arrayOfSlashCommands);
+    }
+  });
+
+  if(client.config.mongoUrl) {
+    mongoose.connect(client.config.mongoUrl, {
+      useNewUrlParser: true,
+      useUnifiedTopology: true,
+    }).then(() => console.log("Successfully connected to MongoDB"));
+  }
+};
+
+
